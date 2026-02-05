@@ -1,4 +1,4 @@
-import { auth } from "@clerk/nextjs/server";
+// import { auth } from "@clerk/nextjs/server";
 import { adminDb } from "@/firebaseAdmin";
 import PDFView from "@/components/PDFView";
 import { createClerkSupabaseClient } from "@/supabase";
@@ -11,9 +11,10 @@ async function ChatToFilePage({
 }) {
   const { id } = await params; // Await the params object to access its properties
 
-  auth.protect();
-  const { userId, getToken } = await auth();
+  // auth.protect();
+  // const { userId, getToken } = await auth();
 
+  const userId = "test-user-id";
   if (!userId) {
     throw new Error("User ID is null");
   }
@@ -27,20 +28,20 @@ async function ChatToFilePage({
 
   const url = ref.data()?.downloadUrl;
 
-  const token = await getToken({ template: 'supabase' })
+  // const token = await getToken({ template: 'supabase' })
 
-  const supabase = createClerkSupabaseClient(token);
+  const supabase = createClerkSupabaseClient(null);
 
   const { data: urlData } = await supabase.storage
-        .from("pdfs")
-        .createSignedUrl(url, 3600);
+    .from("pdfs")
+    .getPublicUrl(url);
 
-      if (!urlData) {
-        console.error("Failed to get public URL");
-        return;
-      }
+  //   if (!urlData) {
+  //     console.error("Failed to get public URL");
+  //     return;
+  //   }
 
-      const fileUrl = urlData.signedUrl;
+  const fileUrl = urlData.publicUrl;
 
 
   if (!url) {

@@ -1,21 +1,22 @@
 'use client'
 
-import { useUser } from "@clerk/nextjs";
+// import { useUser } from "@clerk/nextjs";
 import { Message } from "./Chat";
 import Image from "next/image";
 import { BotIcon, Loader2Icon } from "lucide-react";
 import Markdown from "react-markdown";
 
-function ChatMessage({message}: {message: Message}) {
-    const isHuman = message.role === 'human';
-    const { user } = useUser();
+function ChatMessage({ message }: { message: Message }) {
+  const isHuman = message.role === 'human';
+  // const { user } = useUser();
+  const user = { imageUrl: "" };
   return (
     <div className={`chat ${isHuman ? "chat-end" : "chat-start"}`}>
       <div className="chat-image avatar">
         <div className="w-10 rounded-full">
           {isHuman ? (
             user?.imageUrl && (
-              <Image 
+              <Image
                 src={user?.imageUrl}
                 alt="Profile Picture"
                 width={30}
