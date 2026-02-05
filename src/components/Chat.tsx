@@ -45,14 +45,11 @@ function Chat({ id }: { id: string }) {
 
         console.log("updated Snapshot", snapshot.docs);
 
-        // get second last message to check if the AI is thinking
-        // const lastMessage = messages.pop(); // Avoid mutation
-        const lastMessage = messages[messages.length - 1];
+        // Message update logic checks
+        // We generally want to trust the snapshot, but we might check if we are waiting for a specific ID.
+        // The previous logic blocked updates if "Thinking..." was present, which prevented the real AI response from showing.
+        // We remove that block so the snapshot (source of truth) updates the UI.
 
-        if (lastMessage?.role === 'ai' && lastMessage?.message === "Thinking...") {
-            // return as this is a dummy placeholder msg
-            return;
-        }
 
         const newMessages = snapshot.docs.map(doc => {
             const { role, message, createdAt } = doc.data();
