@@ -1,13 +1,13 @@
 "use client";
 
-import { useUser, useSession } from "@clerk/nextjs";
+// import { useUser, useSession } from "@clerk/nextjs";
 // import { createClient } from "@supabase/supabase-js";
 import { doc, setDoc } from "firebase/firestore";
 import { db } from "../../firebase"; // Update the path to your Firebase Firestore instance
 import { useState } from "react";
 import { v4 as uuidv4 } from "uuid";
 import { generateEmbeddings } from "@/actions/generateEmbeddings";
-import {createClerkSupabaseClient} from "@/supabase"
+import { createClerkSupabaseClient } from "@/supabase"
 
 export enum StatusText {
   UPLOADING = "Uploading file...",
@@ -19,12 +19,13 @@ export enum StatusText {
 export type Status = StatusText[keyof StatusText];
 
 function useUpload() {
-  const { session } = useSession();
+  // const { session } = useSession();
   const [progress, setProgress] = useState<number | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [fileId, setFileId] = useState<string | null>(null);
   const [embeddingProgress, setEmbeddingProgress] = useState<number>(0);
-  const { user } = useUser();
+  // const { user } = useUser();
+  const user = { id: "test-user-id", fullName: "Test User" };
 
   const handleUpload = async (file: File) => {
     if (!file || !user) return;
@@ -32,12 +33,12 @@ function useUpload() {
     const fileIdToUploadTo = uuidv4();
     const filePath = `users/${user.id}/${fileIdToUploadTo}/${file.name}`;
 
-    const clerkToken = await session?.getToken({
-      // Pass the name of the JWT template you created in the Clerk Dashboard
-      template: 'supabase',
-    });
-  
-    const supabase = createClerkSupabaseClient(clerkToken);
+    // const clerkToken = await session?.getToken({
+    //   // Pass the name of the JWT template you created in the Clerk Dashboard
+    //   template: 'supabase',
+    // });
+
+    const supabase = createClerkSupabaseClient(null);
     try {
       setStatus(StatusText.UPLOADING);
 

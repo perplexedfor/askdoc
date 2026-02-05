@@ -1,10 +1,10 @@
-import { auth } from "@clerk/nextjs/server";
+// import { auth } from "@clerk/nextjs/server";
 import PlaceholderDocument from "./PlaceholderDocument"
 import { adminDb } from "@/firebaseAdmin";
 import Document from "./Document";
 
 async function Documents() {
-  const { userId } = await auth();
+  const userId = "test-user-id";
   if (!userId) {
     throw new Error("User not found");
   }
@@ -20,8 +20,8 @@ async function Documents() {
       {documentSnapshot.docs.map((doc) => {
         const { name, downloadUrl, size } = doc.data();
 
-        return(
-          <Document 
+        return (
+          <Document
             key={doc.id}
             id={doc.id}
             name={name}

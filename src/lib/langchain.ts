@@ -1,4 +1,4 @@
-import { auth} from "@clerk/nextjs/server";
+// import { auth} from "@clerk/nextjs/server";
 import pineconeClient from "./pinecone";
 import { Index, RecordMetadata } from "@pinecone-database/pinecone";
 import { PDFLoader } from "@langchain/community/document_loaders/fs/pdf";
@@ -15,7 +15,29 @@ if (!process.env.GEMINI_API_KEY) {
 }
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const model = genAI.getGenerativeModel({ model: "text-embedding-004" });
-const chatModel = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+const chatModel = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
+
+// Helper to list models (Temporary for debugging) - Removed
+// async function listAvailableModels() { ... }
+
+async function callGeminiWithRetry(prompt: string, retries = 3, delay = 1000) {
+  for (let i = 0; i < retries; i++) {
+    try {
+      const geminiChat = chatModel.startChat();
+      const result = await geminiChat.sendMessage(prompt);
+      return result.response.text().trim();
+    } catch (error: any) {
+      if (error.status === 429 || error.message?.includes("429")) {
+        console.warn(`Rate limit hit. Retrying in ${delay}ms... (Attempt ${i + 1}/${retries})`);
+        await new Promise(res => setTimeout(res, delay));
+        delay *= 2; // Exponential backoff
+      } else {
+        throw error;
+      }
+    }
+  }
+  throw new Error("Max retries exceeded for Gemini API");
+}
 
 async function generateEmbeddings(text: string) {
   try {
@@ -30,8 +52,8 @@ async function generateEmbeddings(text: string) {
 export const indexName = "askdoc";
 
 async function fetchMessagesFromDB(docId: string) {
-  const {userId} = await auth();
-  if(!userId) {
+  const userId = "test-user-id";
+  if (!userId) {
     throw new Error("User not found");
   }
 
@@ -46,7 +68,7 @@ async function fetchMessagesFromDB(docId: string) {
     .limit(5) // limit the chat history to upto 5 previous messages
     .get();
 
-  const chatHistory = chats.docs.map((doc) => 
+  const chatHistory = chats.docs.map((doc) =>
     doc.data().role === 'human'
       ? new HumanMessage(doc.data().message)
       : new AIMessage(doc.data().message)
@@ -64,7 +86,7 @@ function sleep(ms: number) {
 
 export async function generateDocs(docId: string) {
   // authenticate use
-  const { userId, getToken } = await auth();
+  const userId = "test-user-id";
   if (!userId) {
     throw new Error("User not found");
   }
@@ -77,39 +99,68 @@ export async function generateDocs(docId: string) {
     .doc(docId)
     .get();
   const downloadUrl = firebaseRef.data()?.downloadUrl;
+  const fileName = firebaseRef.data()?.name || "Unknown File";
 
   if (!downloadUrl) {
     throw new Error("Download URL not found");
   }
 
-  const token = await getToken({ template: 'supabase' })
+  // const token = await getToken({ template: 'supabase' })
 
-  console.log(`--- Download URL fetched successfully: ${downloadUrl} ---`);
-  const response = await fetch(`https://${process.env.SUPABASE_PROJECT_ID}.supabase.co/storage/v1/object/authenticated/pdfs/${downloadUrl}`, {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  if (!supabaseUrl) {
+    throw new Error("NEXT_PUBLIC_SUPABASE_URL is not defined");
+  }
+
+  const fileUrl = `${supabaseUrl}/storage/v1/object/public/pdfs/${downloadUrl}`;
+
+  console.log(`--- Fetching from: ${fileUrl} ---`);
+  const response = await fetch(fileUrl, {
     headers: {
-      "Authorization": `Bearer ${token}`,
+      // "Authorization": `Bearer ${token}`,
     }
   });
+
+  if (!response.ok) {
+    console.error("--- Error fetching PDF: ", response.status, response.statusText);
+    const text = await response.text();
+    console.error("--- Error body: ", text);
+    throw new Error(`Failed to fetch PDF: ${response.statusText}`);
+  }
+
   // Load the PDF into PDFDocument object
   const blobData = await response.blob();
+
+  console.log("--- Content-Type:", response.headers.get("content-type"));
+  console.log("--- Blob size:", blobData.size);
+
   const blob = new Blob([blobData], { type: 'application/pdf' });
 
   // Load the PDF document from the specified path
   console.log("--- Loading the PDF file ---");
   try {
     const loader = new PDFLoader(blob);
-    const docs = await loader.load();    
-    
+    const docs = await loader.load();
+
     // Split the loaded document into smaller parts for easier processing
     console.log("--- Splitting the document into smaller parts ---");
     const splitter = new RecursiveCharacterTextSplitter({
       chunkSize: 2000,
       chunkOverlap: 500,
-    });    
+    });
     const splitdocs = await splitter.splitDocuments(docs);
 
+    // Attach metadata (filename, docId) to every chunk
+    splitdocs.forEach((doc) => {
+      doc.metadata = {
+        ...doc.metadata,
+        docId: docId,
+        fileName: fileName,
+      }
+    })
+
     console.log(`--- Split into ${splitdocs.length} parts ---`);
-    
+
     return splitdocs;
   } catch (error) {
     console.error("Error loading PDF:", error);
@@ -163,77 +214,102 @@ class CustomPineconeEmbeddings implements EmbeddingsInterface {
 
 
 export async function generateEmbeddingsInPineconeVectorStore(docId: string) {
-  const { userId } = await auth();
+  const userId = "test-user-id";
   if (!userId) {
     throw new Error("User not found");
   }
 
-  console.log("--- Checking for existing embeddings... ---");
-  
   const index = await pineconeClient.index(indexName);
-  const namespaceAlreadyExists = await namespaceExists(index, docId);
 
-  if (namespaceAlreadyExists) {
+  // Use a global namespace for the user
+  const namespace = userId;
+
+  // Check if this specific document already exists in the global namespace
+  // We can't use describeIndexStats for checking individual file existence in a shared namespace easily
+  // So we try a different check: list paginated? or check strictly for "ALL" mode.
+
+  if (docId === "ALL") {
+    console.log(`--- Returning vector store for ALL documents in namespace: ${namespace} ---`);
+    const customEmbeddings = new CustomPineconeEmbeddings(index, namespace);
+    return new PineconeStore(customEmbeddings, {
+      pineconeIndex: index,
+      namespace: namespace,
+      textKey: 'text',
+      // No filter means search everything
+    });
+  }
+
+  // For specific docId, we want to ensure it's indexed.
+  // Ideally, we check if vectors with metadata.docId === docId exist.
+  // For simplicity/performance in this pattern: try to fetch the first chunk ID properly formatted
+  // NOTE: This assumes we follow a consistent ID pattern: `${docId}-0`
+  const firstChunkId = `${docId}-0`;
+  const fetchResult = await index.namespace(namespace).fetch([firstChunkId]);
+  const exists = fetchResult && fetchResult.records && fetchResult.records[firstChunkId];
+
+  if (exists) {
     console.log(
-      `--- Namespace ${docId} already exists, reusing existing embeddings. ---`
+      `--- Document ${docId} already exists in global namespace, reusing. ---`
     );
-    
-    try {
-      return PineconeStore.fromExistingIndex(new CustomPineconeEmbeddings(index, docId), {
-        pineconeIndex: index,
-        namespace: docId,
-        textKey: "text",
-      });
-    } catch (error) {
-      console.error("Error fetching existing embeddings:", error);
-    }
+
+    const customEmbeddings = new CustomPineconeEmbeddings(index, namespace);
+    return new PineconeStore(customEmbeddings, {
+      pineconeIndex: index,
+      namespace: namespace,
+      textKey: "text",
+      filter: { docId: { $eq: docId } }, // Filter by this document
+    });
   } else {
     console.log("--- Generating embeddings... ---");
     const splitDocs = await generateDocs(docId);
-    const chunks = splitDocs; 
-    for (const batch of chunks) {
-      const text = batch.pageContent; // batch is a Document object
-      const embedding = await generateEmbeddings(text);
+    const chunks = splitDocs;
 
-      if (!embedding) {
-        console.error("Failed to generate embedding for:", text);
-        continue;
-      }
+    // We upsert all chunks to the user's namespace
+    const vectors = [];
 
-      console.log(
-        `--- Storing the embeddings in namespace ${docId} in the ${indexName} Pinecone vector store. ---`
-      );
-      // Store the embeddings in the Pinecone vector store
-      try {
-        await index.namespace(docId).upsert([
-          {
-            id: `${docId}-${batch.id}`, // Use a unique ID for each page
-            values: embedding,
-            metadata: {
-              text: text,
-            },
-          },
-        ]);
-      } catch (error) {
-        console.error("Error storing embedding:", error);
-      }
-      
-      await sleep(2000); // Prevent hitting Pinecone rate limits
+    for (let i = 0; i < chunks.length; i++) {
+      const batch = chunks[i];
+      const text = batch.pageContent;
+      const embedding = await generateEmbeddings(text); // existing helper
+
+      if (!embedding) continue;
+
+      // Use index 'i' to match the check `${docId}-${i}`? 
+      // Current splitting logic produces `splitdocs`. Let's assume sequential ID `docId-i`.
+      // Ensure we use the SAME ID pattern we check for: `docId-${index}`
+      const vectorId = `${docId}-${i}`;
+
+      vectors.push({
+        id: vectorId,
+        values: embedding,
+        metadata: {
+          text: text,
+          docId: docId,
+          fileName: batch.metadata.fileName,
+          pageNumber: batch.metadata.loc.pageNumber,
+        },
+      });
     }
-    const customEmbeddings = new CustomPineconeEmbeddings(index, docId);
-    const vectorStore = new PineconeStore(customEmbeddings, {
+
+    console.log(`--- Batch upserting ${vectors.length} vectors ---`);
+    // Pinecone recommends batches of 100 or so. For this demo, assuming small files.
+    // If > 100, might need batching logic.
+    await index.namespace(namespace).upsert(vectors);
+
+    const customEmbeddings = new CustomPineconeEmbeddings(index, namespace);
+    return new PineconeStore(customEmbeddings, {
       pineconeIndex: index,
-      namespace: docId,
+      namespace: namespace,
       textKey: 'text',
+      filter: { docId: { $eq: docId } },
     });
-    return vectorStore;
   }
 }
 
-const generateLangchainCompletion = async (docId: string, question:string) => {
+const generateLangchainCompletion = async (docId: string, question: string) => {
   const pineconeVectorStore = await generateEmbeddingsInPineconeVectorStore(docId);
-  
-  if(!pineconeVectorStore) {
+
+  if (!pineconeVectorStore) {
     throw new Error("Pinecone vector store not found");
   }
 
@@ -243,13 +319,13 @@ const generateLangchainCompletion = async (docId: string, question:string) => {
   console.log("--- Creating a retriever ---");
   const retriever = pineconeVectorStore.asRetriever({
     searchType: "similarity",
-    k : 30,
+    k: 30,
   });
 
   // Rephrase query based on chat history
   console.log("--- Rephrasing query based on chat history ---");
   const rephrasedQuery = await rephraseQueryWithHistory(question, chatHistory);
-  
+
   // Retrieve relevant documents using the rephrased query
   console.log("--- Retrieving documents with rephrased query ---");
   let relevantDocuments = await retriever.invoke(rephrasedQuery);
@@ -258,10 +334,10 @@ const generateLangchainCompletion = async (docId: string, question:string) => {
   if (relevantDocuments.length === 0) {
     relevantDocuments = await generateDocs(docId);
   }
-  
+
   // Generate completion based on the query and retrieved documents
   const completion = await generateGeminiCompletion(rephrasedQuery, relevantDocuments, chatHistory);
-  
+
   return completion;
 }
 
@@ -271,7 +347,7 @@ async function rephraseQueryWithHistory(question: string, chatHistory: (HumanMes
   const historyString = chatHistory
     .map((msg) => `${msg instanceof HumanMessage ? "Human" : "AI"}: ${msg.content}`)
     .join("\n");
-  
+
   // Create a prompt for Gemini to rephrase the query
   const prompt = `
     Given the following conversation history:
@@ -283,16 +359,14 @@ async function rephraseQueryWithHistory(question: string, chatHistory: (HumanMes
     Reformulate the question to be standalone and include all necessary context from the conversation history.
     Only output the reformulated question, nothing else.
   `;
-  
+
   try {
     // Use Gemini to rephrase the query
-    const geminiChat = chatModel.startChat();
-    const result = await geminiChat.sendMessage(prompt);
-    const rephrasedQuery = result.response.text().trim();
-    
+    const rephrasedQuery = await callGeminiWithRetry(prompt);
+
     console.log("Original query:", question);
     console.log("Rephrased query:", rephrasedQuery);
-    
+
     return rephrasedQuery;
   } catch (error) {
     console.error("Error rephrasing query:", error);
@@ -302,14 +376,18 @@ async function rephraseQueryWithHistory(question: string, chatHistory: (HumanMes
 
 // Function to generate completion using Gemini
 async function generateGeminiCompletion(question: string, documents: Document[], chatHistory: (HumanMessage | AIMessage)[]) {
-  // Extract text from documents
-  const documentTexts = documents.map((doc) => doc.pageContent).join("\n\n");
-  
+  // Extract text from documents with updated format (Source + Page)
+  const documentTexts = documents.map((doc) => {
+    const pageNum = doc.metadata.pageNumber;
+    const fileName = doc.metadata.fileName || "Unknown Source";
+    return `[Source: ${fileName}, Page ${pageNum}]: ${doc.pageContent}`;
+  }).join("\n\n");
+
   // Convert chat history to a string format for context
   const historyString = chatHistory
     .map((msg) => `${msg instanceof HumanMessage ? "Human" : "AI"}: ${msg.content}`)
     .join("\n");
-  
+
   // Create a prompt for Gemini
   const prompt = `
     You are an AI assistant answering questions about documents.
@@ -320,15 +398,23 @@ async function generateGeminiCompletion(question: string, documents: Document[],
     Context information from the documents:
     ${documentTexts}
     
-    Based on the above context and conversation history, answer the following question:
-    ${question}"
+    Based on the above context and conversation history, answer the following question.
+    
+    IMPORTANT:
+    - You are a knowledge base assistant. 
+    - Answer using ONLY the context provided above. 
+    - You must cited your sources for every fact you state. 
+    - Citations must be in the format [Source: Filename, Page X].
+    - If the answer is not in the context, say you don't know.
+
+    Question:
+    "${question}"
   `;
-  
+
   try {
     // Use Gemini to generate a response
-    const geminiChat = chatModel.startChat();
-    const result = await geminiChat.sendMessage(prompt);
-    return result.response.text().trim();
+    const responseText = await callGeminiWithRetry(prompt);
+    return responseText;
   } catch (error) {
     console.error("Error generating completion:", error);
     return "I'm sorry, I encountered an error while generating a response.";
