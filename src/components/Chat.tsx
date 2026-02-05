@@ -46,7 +46,9 @@ function Chat({ id }: { id: string }) {
         console.log("updated Snapshot", snapshot.docs);
 
         // get second last message to check if the AI is thinking
-        const lastMessage = messages.pop();
+        // const lastMessage = messages.pop(); // Avoid mutation
+        const lastMessage = messages[messages.length - 1];
+
         if (lastMessage?.role === 'ai' && lastMessage?.message === "Thinking...") {
             // return as this is a dummy placeholder msg
             return;
@@ -63,6 +65,7 @@ function Chat({ id }: { id: string }) {
         });
         setMessages(newMessages);
 
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [snapshot]);
 
     const handleSubmit = async (e: FormEvent) => {
