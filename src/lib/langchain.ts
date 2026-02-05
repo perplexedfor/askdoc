@@ -26,6 +26,7 @@ async function callGeminiWithRetry(prompt: string, retries = 3, delay = 1000) {
       const geminiChat = chatModel.startChat();
       const result = await geminiChat.sendMessage(prompt);
       return result.response.text().trim();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } catch (error: any) {
       if (error.status === 429 || error.message?.includes("429")) {
         console.warn(`Rate limit hit. Retrying in ${delay}ms... (Attempt ${i + 1}/${retries})`);
@@ -80,9 +81,9 @@ async function fetchMessagesFromDB(docId: string) {
   return chatHistory;
 }
 
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
+// function sleep(ms: number) {
+//   return new Promise((resolve) => setTimeout(resolve, ms));
+// }
 
 export async function generateDocs(docId: string) {
   // authenticate use
@@ -168,21 +169,21 @@ export async function generateDocs(docId: string) {
   }
 }
 
-async function namespaceExists(
-  index: Index<RecordMetadata>,
-  namespace: string
-) {
-  console.log(`Checking for namespace: ${namespace}`);
-  try {
-    const stats = await index.describeIndexStats();
-    console.log("Existing namespaces:", Object.keys(stats.namespaces ?? {}));
+// async function namespaceExists(
+//   index: Index<RecordMetadata>,
+//   namespace: string
+// ) {
+//   console.log(`Checking for namespace: ${namespace}`);
+//   try {
+//     const stats = await index.describeIndexStats();
+//     console.log("Existing namespaces:", Object.keys(stats.namespaces ?? {}));
 
-    return Object.keys(stats.namespaces ?? {}).includes(namespace);
-  } catch (error) {
-    console.error("Error checking namespace existence:", error);
-    return false;
-  }
-}
+//     return Object.keys(stats.namespaces ?? {}).includes(namespace);
+//   } catch (error) {
+//     console.error("Error checking namespace existence:", error);
+//     return false;
+//   }
+// }
 
 // class To use the asRetriever() function from LangChain, you need to create a PineconeStore object that wraps your Pinecone index and provides an embeddings interface.
 class CustomPineconeEmbeddings implements EmbeddingsInterface {
